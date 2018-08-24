@@ -7,11 +7,16 @@ Created on Thu Aug  9 16:24:43 2018
 
 Calculate the percent composition of a molecular orbital
 in Gaussian, specify pop=full keyword
+
+This package is written restrictively for Ag6-N2. Any deviation from my standard Ag6-N2 coordinate input
+will need to be accounted for in the package. See relevant function comments
 """
 
 import numpy as np
 
 def control_center(filename, MO_array):
+    '''run this function to get the total result. Outputs the entire MO coefficient array 'data'
+    and the partitions into N7 and N8.'''
     
     MO_array = sorted(MO_array)
     line_count = get_line_count(filename)
@@ -19,13 +24,14 @@ def control_center(filename, MO_array):
     clean_array = make_initial_array(raw_MO_data, line_count)
     lines = determine_indexing_lines(MO_array)
     data_array = cleanup_raw_coefs(raw_MO_data, line_count, MO_array, clean_array, lines)
+    N7, N8 = N2_CSPA_contributions(data_array, MO_array, line_count)
     
-    
-    return data_array
+    return data_array, N7, N8
 
     
 def get_line_count(filename):
-
+    ''' determines number of AOs (= number of MOs)'''
+    
     line_count = 0
     
     with open(filename,'r') as f:
@@ -43,7 +49,7 @@ def get_line_count(filename):
     return line_count
 
 def get_raw_coefs(MO_array, line_count, filename):
-    ''' pulls the raw coef data from gaussian output file '''
+    ''' pulls the raw coef data from gaussian output file and outputs the raw lines'''
     data = []
     MO = 0
     orb_line = []
@@ -52,14 +58,16 @@ def get_raw_coefs(MO_array, line_count, filename):
         for line in f:
             if ("Molecular Orbital Coefficients:" in line):
                 coupling_line = next(f)
-                for MO in MO_array:
-                    if str(MO) in coupling_line.split() and str(MO) not in orb_line:
+                while MO < len(MO_array):
+                    if str(MO_array[MO]) in coupling_line.split() and str(MO_array[MO]) not in orb_line:
                         for i in coupling_line.split():
                             orb_line.append(i)
                         for i in range(line_count + 3):
                             data.append(coupling_line)
                             coupling_line = next(f)
-                    elif str(MO) in orb_line:
+                        MO += 1
+                    if str(MO_array[MO]) in orb_line:
+                        MO += 1
                         continue
                     else:
                         for i in range(line_count + 3):
@@ -68,6 +76,7 @@ def get_raw_coefs(MO_array, line_count, filename):
     return data
 
 def locate_MO_index(MO, raw_MO_data_line):
+    '''Quick function used to pull the correct data points for the cleanup function'''
     
     counter = 0
     split_MO_line = raw_MO_data_line.split()
@@ -80,6 +89,8 @@ def locate_MO_index(MO, raw_MO_data_line):
     return MO_col # indexes from 0 (MO_col = 2 means third column)
 
 def make_initial_array(raw_MO_data, line_count):
+    '''Sets up the cleaned-up array without adding the MO data yet. Just grabs the first four columns, which
+    contain info on the AO function names and atoms'''
     
     clean_array = []
     
@@ -99,6 +110,8 @@ def make_initial_array(raw_MO_data, line_count):
     return clean_array
 
 def determine_indexing_lines(MO_array):
+    '''Breaks up the inputted MO_array into groups based on modulus 5, i.e. the MO_array = [1,2, 3, 4, 5,6,7,8,9,10,11,12]
+    would output lines = [[1,2,3,4,5],[6,7,8,9,10],[11,12]]'''
     
     MO = 0
     next_MO = 1
@@ -125,14 +138,12 @@ def determine_indexing_lines(MO_array):
 
 
 def cleanup_raw_coefs(raw_MO_data, line_count, MO_array, clean_array, lines):
-
+    ''' Cleans up the raw MO data lines and outputs an ordered MO/AO array (AOs on rows, MOs on columns)'''
+    
     jump_index = line_count + 3
     clean_index = 0
     temp_array = []
-    temp_array2 = []
-    
-    #lines = determine_indexing_lines(MO_array) # move this function call to beginning, and put lines as an input to this function
-            
+    temp_array2 = []            
     big_counter = 0
     lines_max = len(lines)
 
@@ -156,7 +167,66 @@ def cleanup_raw_coefs(raw_MO_data, line_count, MO_array, clean_array, lines):
     
     return data_array
     
+
+def N2_CSPA_contributions(data_array, MO_array, line_count):
+    '''performs C squared population analysis (see Ros and Schuit, Theoretica chimica acta, 1966, 4, 1, 1-12)
+    If you're not working with Ag6-N2, you'll need to change the second for loop to reflect the atom order'''
     
+    N7 = np.zeros(len(MO_array))
+    N8 = np.zeros(len(MO_array))
+    tots_sq = np.zeros(len(MO_array))
+    N7_sq_rat = np.ones(len(MO_array))
+    N8_sq_rat = np.ones(len(MO_array))
+    
+    for i in data_array:
+        k = 0
+        for j in i[4::]:
+            tots_sq[k] = tots_sq[k] + abs(float(j))**2
+            k = k + 1
+        
+    for i in range(len(data_array)):
+        if str(7) in data_array[i][1]: # must change these if the N order moves!!!
+            N7 = sq_sum_N(i,data_array,N7, line_count, 7)
+        if str(8) in data_array[i][1]:
+            N8 = sq_sum_N(i,data_array,N8, line_count, 8)
+        
+    for i in range(len(tots_sq)):
+        N7_sq_rat[i] = 100.0*N7_sq_rat[i]*N7[i]/tots_sq[i]
+        N8_sq_rat[i] = 100.0*N8_sq_rat[i]*N8[i]/tots_sq[i]
+    
+    pretty_N7 = [round(x,4) for x in N7_sq_rat]
+    pretty_N8 = [round(x,4) for x in N8_sq_rat]
+    
+    return pretty_N7, pretty_N8
+    
+
+def sq_sum_N(i, data_array, N, line_count, atom_num):
+    skipper = 0
+    while data_array[i+skipper][1] == 'blank' or data_array[i+skipper][1] == str(atom_num):
+        n = 0
+        for j in data_array[i+skipper][4::]:
+            N[n] = N[n] + abs(float(j)) ** 2
+            n += 1
+        skipper += 1
+        if (i+skipper) == line_count:
+            break
+    
+    return N
+    
+    
+def test_AO_tots(data_array):
+    '''use with all MOs to test that AOs sum to 1'''
+    k = 0
+    row_sum_occ = np.zeros(len(data_array))
+    row_sum_tot = np.zeros(len(data_array))
+    
+    for i in data_array:
+        for j in i[4:68]:
+            row_sum_occ[k] = row_sum_occ[k] + (float(j)) ** 2
+        for m in i[4::]:
+            row_sum_tot[k] = row_sum_tot[k] + (float(m)) ** 2
+        k += 1
+
 def N2_contributions(data_array, MO_array, line_count):
     
     N7 = np.zeros(len(MO_array))
@@ -188,39 +258,6 @@ def N2_contributions(data_array, MO_array, line_count):
     for i in range(len(tots)):
         N7_rat[i] = N7_rat[i]*N7[i]/tots[i]
         N8_rat[i] = N8_rat[i]*N8[i]/tots[i]
-
-def N2_CSPA_contributions(data_array, MO_array, line_count):
-    '''performs C squared population analysis (see Ros and Schuit, Theoretica chimica acta, 1966, 4, 1, 1-12)
-    If you're not working with Ag6-N2, you'll need to change the second for loop to reflect the atom order'''
-    
-    N7 = np.zeros(len(MO_array))
-    N8 = np.zeros(len(MO_array))
-    tots = np.zeros(len(MO_array))
-    tots_sq = np.zeros(len(MO_array))
-    N7_rat = np.ones(len(MO_array))
-    N8_rat = np.ones(len(MO_array))
-    
-    for i in data_array:
-        k = 0
-        for j in i[4::]:
-            tots[k] = tots[k] + abs(float(j))
-            tots_sq[k] = tots[k] + abs(float(j))**2
-            k = k + 1
-        
-    for i in range(len(data_array)):
-        if str(7) in data_array[i][1]: # must change these if the N order moves!!!
-            N7 = sq_sum_N(i,data_array,N7, line_count, 7)
-        if str(8) in data_array[i][1]:
-            N8 = sq_sum_N(i,data_array,N8, line_count, 8)
-        
-    for i in range(len(tots)):
-        N7_rat[i] = 100.0*N7_rat[i]*N7[i]/tots[i]
-        N8_rat[i] = 100.0*N8_rat[i]*N8[i]/tots[i]
-    
-    pretty_N7 = [round(x,4) for x in N7_rat]
-    pretty_N8 = [round(x,4) for x in N8_rat]
-    
-    return pretty_N7, pretty_N8
     
 def sum_N(i, data_array, N, line_count, atom_num):
     skipper = 0
@@ -234,35 +271,6 @@ def sum_N(i, data_array, N, line_count, atom_num):
             break
     
     return N
-
-def sq_sum_N(i, data_array, N, line_count, atom_num):
-    skipper = 0
-    while data_array[i+skipper][1] == 'blank' or data_array[i+skipper][1] == str(atom_num):
-        n = 0
-        for j in data_array[i+skipper][4::]:
-            N[n] = N[n] + abs(float(j)) ** 2
-            n += 1
-        skipper += 1
-        if (i+skipper) == line_count:
-            break
-    
-    return N
-    
-    
-def test_AO_tots(data_array):
-    '''use with all MOs to test that AOs sum to 1'''
-    k = 0
-    row_sum_occ = np.zeros(len(data_array))
-    row_sum_tot = np.zeros(len(data_array))
-    
-    for i in data_array:
-        for j in i[4:68]:
-            row_sum_occ[k] = row_sum_occ[k] + (float(j)) ** 2
-        for m in i[4::]:
-            row_sum_tot[k] = row_sum_tot[k] + (float(m)) ** 2
-        k += 1
-    
-    
     
     
     
